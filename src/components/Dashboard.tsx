@@ -3,80 +3,98 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { removeAuthToken } from '@/lib/auth';
-import { onMessageListener } from '@/lib/firebase';
+import { removeAuthToken, getUserData, logout } from '@/lib/auth';
 import { NotificationCard } from '@/components/NotificationCard';
 import { PermissionBanner } from '@/components/PermissionBanner';
-import { Bell, LogOut, Settings, Shield, Smartphone, Trash2 } from 'lucide-react';
-
-interface Notification {
-  id: string;
-  title: string;
-  body: string;
-  timestamp: string;
-  read: boolean;
-}
+import { notificationService, NotificationData } from '@/services/notificationService';
+import { Bell, LogOut, Settings, Shield, Smartphone, Trash2, RefreshCw } from 'lucide-react';
 
 interface DashboardProps {
   onLogout: () => void;
 }
 
 export const Dashboard = ({ onLogout }: DashboardProps) => {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [notificationPermission, setNotificationPermission] = useState(Notification.permission);
+  const [notifications, setNotifications] = useState<NotificationData[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const userData = getUserData();
 
   useEffect(() => {
-    // Listen for foreground messages
-    const setupMessageListener = async () => {
-      try {
-        await onMessageListener().then((payload: any) => {
-          const newNotification: Notification = {
-            id: Date.now().toString(),
-            title: payload.notification?.title || 'New Notification',
-            body: payload.notification?.body || 'You received a new message',
-            timestamp: new Date().toISOString(),
-            read: false
-          };
+    // Subscribe to notification updates
+    const unsubscribe = notificationService.subscribe((updatedNotifications) => {
+      setNotifications(updatedNotifications);
+    });
 
-          setNotifications(prev => [newNotification, ...prev]);
-          
-          toast({
-            title: newNotification.title,
-            description: newNotification.body,
-          });
-        });
-      } catch (error) {
-        console.error('Error setting up message listener:', error);
-      }
+    // Cleanup on unmount
+    return () => {
+      unsubscribe();
     };
+  }, []);
 
-    setupMessageListener();
-  }, [toast]);
-
-  const handleLogout = () => {
-    removeAuthToken();
-    onLogout();
+  const handleLogout = async () => {
+    setIsLoading(true);
+    try {
+      await logout();
+      onLogout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const markAsRead = (id: string) => {
-    setNotifications(prev =>
-      prev.map(notif =>
-        notif.id === id ? { ...notif, read: true } : notif
-      )
-    );
+  const handleMarkAsRead = (id: string) => {
+    notificationService.markAsRead(id);
   };
 
-  const dismissNotification = (id: string) => {
-    setNotifications(prev => prev.filter(notif => notif.id !== id));
+  const handleDismissNotification = (id: string) => {
+    notificationService.removeNotification(id);
   };
 
-  const clearAllNotifications = () => {
-    setNotifications([]);
+  const handleMarkAllAsRead = () => {
+    notificationService.markAllAsRead();
+    toast({
+      title: 'Marked as Read',
+      description: 'All notifications have been marked as read.',
+    });
+  };
+
+  const handleClearAll = () => {
+    notificationService.clearAllNotifications();
+    toast({
+      title: 'Notifications Cleared',
+      description: 'All notifications have been removed.',
+    });
+  };
+
+  const handleSendTestNotification = () => {
+    notificationService.sendTestNotification();
+  };
+
+  const handleRefreshPermission = async () => {
+    setIsLoading(true);
+    try {
+      const enabled = await notificationService.enableNotifications();
+      if (enabled) {
+        toast({
+          title: 'Success',
+          description: 'Notifications have been enabled.',
+        });
+      }
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to enable notifications.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const getPermissionStatus = () => {
-    switch (notificationPermission) {
+    const permission = notificationService.getPermissionStatus();
+    switch (permission) {
       case 'granted':
         return { text: 'Enabled', variant: 'default' as const, color: 'text-notification-success' };
       case 'denied':
@@ -86,7 +104,9 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
     }
   };
 
+  const stats = notificationService.getStats();
   const permissionStatus = getPermissionStatus();
+  const fcmToken = notificationService.getFCMToken();
 
   return (
     <div className="min-h-screen bg-background">
@@ -100,20 +120,36 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
               </div>
               <div>
                 <h1 className="text-xl font-bold">Push Pilot Connect</h1>
-                <p className="text-sm text-muted-foreground">Notification Management Dashboard</p>
+                <p className="text-sm text-muted-foreground">
+                  Welcome back, {userData?.name || 'User'}
+                </p>
               </div>
             </div>
-            <Button onClick={handleLogout} variant="outline" size="sm">
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
+            <div className="flex items-center gap-2">
+              {stats.unread > 0 && (
+                <Badge variant="destructive" className="px-2 py-1">
+                  {stats.unread} unread
+                </Badge>
+              )}
+              <Button 
+                onClick={handleLogout} 
+                variant="outline" 
+                size="sm"
+                disabled={isLoading}
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Logout
+              </Button>
+            </div>
           </div>
         </div>
       </header>
 
       <div className="container mx-auto px-4 py-8">
         {/* Permission Banner */}
-        <PermissionBanner />
+        {notificationService.getPermissionStatus() !== 'granted' && (
+          <PermissionBanner onPermissionGranted={() => window.location.reload()} />
+        )}
         
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Status Cards */}
@@ -129,9 +165,22 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-sm">Permission</span>
-                    <Badge variant={permissionStatus.variant}>
-                      {permissionStatus.text}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={permissionStatus.variant}>
+                        {permissionStatus.text}
+                      </Badge>
+                      {permissionStatus.text !== 'Enabled' && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={handleRefreshPermission}
+                          disabled={isLoading}
+                          className="h-6 w-6 p-0"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm">Device Type</span>
@@ -141,9 +190,23 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm">Notifications Received</span>
-                    <Badge variant="secondary">{notifications.length}</Badge>
+                    <span className="text-sm">Total Notifications</span>
+                    <Badge variant="secondary">{stats.total}</Badge>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Unread</span>
+                    <Badge variant={stats.unread > 0 ? "destructive" : "secondary"}>
+                      {stats.unread}
+                    </Badge>
+                  </div>
+                  {fcmToken && (
+                    <div className="pt-2 border-t border-border/50">
+                      <span className="text-xs text-muted-foreground">FCM Token Active</span>
+                      <div className="text-xs text-muted-foreground mt-1 font-mono bg-muted/50 p-1 rounded text-center">
+                        {fcmToken.slice(0, 20)}...
+                      </div>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -160,29 +223,24 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
                   <Button 
                     className="w-full justify-start bg-primary/10 hover:bg-primary/20 text-primary border-primary/20"
                     variant="outline"
-                    onClick={() => {
-                      toast({
-                        title: 'Test Notification',
-                        description: 'This is a test notification from your dashboard.',
-                      });
-                    }}
+                    onClick={handleSendTestNotification}
                   >
+                    <Bell className="w-4 h-4 mr-2" />
                     Send Test Notification
                   </Button>
                   <Button 
                     className="w-full justify-start"
                     variant="outline"
-                    onClick={() => {
-                      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-                    }}
+                    onClick={handleMarkAllAsRead}
+                    disabled={stats.unread === 0}
                   >
                     Mark All as Read
                   </Button>
                   <Button 
                     className="w-full justify-start text-destructive border-destructive/20 hover:bg-destructive/10"
                     variant="outline"
-                    onClick={clearAllNotifications}
-                    disabled={notifications.length === 0}
+                    onClick={handleClearAll}
+                    disabled={stats.total === 0}
                   >
                     <Trash2 className="w-4 h-4 mr-2" />
                     Clear All
@@ -199,9 +257,15 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
                 <CardTitle className="flex items-center gap-2">
                   <Bell className="w-5 h-5" />
                   Recent Notifications
+                  {stats.total > 0 && (
+                    <Badge variant="secondary" className="ml-auto">
+                      {stats.total}
+                    </Badge>
+                  )}
                 </CardTitle>
                 <CardDescription>
-                  Your latest push notifications will appear here
+                  Your latest push notifications will appear here. 
+                  {stats.unread > 0 && ` ${stats.unread} unread notifications.`}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -212,9 +276,17 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
                         <Bell className="w-8 h-8" />
                       </div>
                       <h3 className="text-lg font-semibold mb-2">No notifications yet</h3>
-                      <p className="text-sm max-w-md mx-auto leading-relaxed">
+                      <p className="text-sm max-w-md mx-auto leading-relaxed mb-4">
                         When you receive push notifications, they'll appear here. You can test the system by clicking the "Send Test Notification" button.
                       </p>
+                      <Button 
+                        onClick={handleSendTestNotification}
+                        variant="outline"
+                        size="sm"
+                      >
+                        <Bell className="w-4 h-4 mr-2" />
+                        Try Test Notification
+                      </Button>
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -226,8 +298,9 @@ export const Dashboard = ({ onLogout }: DashboardProps) => {
                           body={notification.body}
                           timestamp={notification.timestamp}
                           read={notification.read}
-                          onMarkRead={markAsRead}
-                          onDismiss={dismissNotification}
+                          type={notification.type}
+                          onMarkRead={handleMarkAsRead}
+                          onDismiss={handleDismissNotification}
                         />
                       ))}
                     </div>

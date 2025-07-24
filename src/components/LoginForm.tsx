@@ -4,9 +4,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { login, setAuthToken } from '@/lib/auth';
-import { requestNotificationPermission } from '@/lib/firebase';
-import { registerFCMToken } from '@/lib/auth';
+import { login, setAuthToken, setUserData } from '@/lib/auth';
+import { notificationService } from '@/services/notificationService';
 
 interface LoginFormProps {
   onLoginSuccess: () => void;
@@ -23,31 +22,42 @@ export const LoginForm = ({ onLoginSuccess }: LoginFormProps) => {
     setIsLoading(true);
 
     try {
-      // Login and get JWT token
+      // Perform login
       const response = await login(email, password);
-      setAuthToken(response.token);
+      
+      if (response.success && response.token && response.user) {
+        setAuthToken(response.token);
+        setUserData(response.user);
 
-      // Request notification permission and register FCM token
-      const fcmToken = await requestNotificationPermission();
-      if (fcmToken) {
-        await registerFCMToken(fcmToken);
-        toast({
-          title: 'Login Successful',
-          description: 'Notifications enabled for this device.',
-        });
+        // Try to enable notifications after successful login
+        const notificationEnabled = await notificationService.enableNotifications();
+        
+        if (notificationEnabled) {
+          toast({
+            title: 'Login Successful',
+            description: 'Notifications have been enabled for this device.',
+          });
+        } else {
+          toast({
+            title: 'Login Successful',
+            description: 'Please enable notifications in your browser for the best experience.',
+            variant: 'default',
+          });
+        }
+
+        onLoginSuccess();
       } else {
         toast({
-          title: 'Login Successful',
-          description: 'Please enable notifications for the best experience.',
+          title: 'Login Failed',
+          description: response.message || 'Please check your credentials and try again.',
           variant: 'destructive',
         });
       }
-
-      onLoginSuccess();
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Login error:', error);
       toast({
         title: 'Login Failed',
-        description: 'Please check your credentials and try again.',
+        description: error.message || 'An unexpected error occurred. Please try again.',
         variant: 'destructive',
       });
     } finally {
